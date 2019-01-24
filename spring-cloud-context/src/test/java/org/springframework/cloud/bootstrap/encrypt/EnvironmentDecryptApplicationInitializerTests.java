@@ -15,11 +15,14 @@
  */
 package org.springframework.cloud.bootstrap.encrypt;
 
+import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
 
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.util.TestPropertyValues;
 import org.springframework.boot.test.util.TestPropertyValues.Type;
 import org.springframework.context.ApplicationContext;
@@ -30,6 +33,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.PropertySource;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.crypto.encrypt.Encryptors;
 import org.springframework.security.crypto.encrypt.TextEncryptor;
 
@@ -202,6 +206,42 @@ public class EnvironmentDecryptApplicationInitializerTests {
 		assertEquals("spam", context.getEnvironment().getProperty("foo"));
 		assertEquals("bar2", context.getEnvironment().getProperty("foo2"));
 		verify(encryptor).decrypt("bar2");
+		verifyNoMoreInteractions(encryptor);
+	}
+
+	@Test
+	public void testOnlyDecryptIfNotOverriddenWithProfiles() throws IOException {
+		ConfigurableApplicationContext context = new AnnotationConfigApplicationContext();
+
+		TextEncryptor encryptor = mock(TextEncryptor.class);
+
+		// use case: This may be a profile from different region...
+		when(encryptor.decrypt("bar7-p1-clear"))
+				.thenThrow(new Error("No Access to decryption Key"));
+
+		when(encryptor.decrypt("bar7-p2-clear")).thenReturn("bar7-p2-clear-ok");
+
+		// Profile p2 overrides values from p1
+		context.getEnvironment().setActiveProfiles("p1", "p2");
+
+		EnvironmentDecryptApplicationInitializer initializer = new EnvironmentDecryptApplicationInitializer(
+				encryptor);
+
+		YamlPropertySourceLoader loader = new YamlPropertySourceLoader();
+		List<PropertySource<?>> yamlTestProperties = loader.load(
+				"decrypt.override-profiles.yml",
+				new ClassPathResource("decrypt.override-profiles.yml"));
+		yamlTestProperties.forEach(
+				ps -> context.getEnvironment().getPropertySources().addFirst(ps));
+
+		initializer.initialize(context);
+
+		// Verify setup
+		assertEquals("foo7-p2", context.getEnvironment().getProperty("foo7"));
+
+		assertEquals("bar7-p2-clear-ok", context.getEnvironment().getProperty("bar7"));
+
+		verify(encryptor).decrypt("bar7-p2-clear");
 		verifyNoMoreInteractions(encryptor);
 	}
 }
